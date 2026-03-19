@@ -1,0 +1,61 @@
+version: "3.9"
+
+services:
+
+  # ── VulnHunter Scanner ──────────────────────────────────────────
+  vulnhunter:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: vulnhunter
+    ports:
+      - "8000:8000"
+    environment:
+      - PYTHONUNBUFFERED=1
+      - LOG_LEVEL=info
+    volumes:
+      - reports:/app/reports
+    networks:
+      - scanner-net
+    depends_on:
+      dvwa:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── DVWA — Damn Vulnerable Web Application ──────────────────────
+  dvwa:
+    image: vulnerables/web-dvwa:latest
+    container_name: dvwa
+    ports:
+      - "8080:80"
+    environment:
+      - MYSQL_ROOT_PASSWORD=dvwa
+    networks:
+      - scanner-net
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:80/login.php" ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
+  # ── OWASP Juice Shop ────────────────────────────────────────────
+  juiceshop:
+    image: bkimminich/juice-shop:latest
+    container_name: juiceshop
+    ports:
+      - "3000:3000"
+    networks:
+      - scanner-net
+    restart: unless-stopped
+
+networks:
+  scanner-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/24
+
+volumes:
+  reports:
