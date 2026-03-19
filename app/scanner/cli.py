@@ -53,10 +53,10 @@ SEV_COLORS = {
 
 def banner():
     print(f"""
-{C}╔══════════════════════════════════════════════════════╗
-║  {BOLD}⚔  VulnHunter{RST}{C}  —  Automated Web Vulnerability Scanner  ║
-║  {DIM}OWASP Top 10  |  Python 3.11  |  Async Engine{RST}{C}          ║
-╚══════════════════════════════════════════════════════╝{RST}
+{C}+------------------------------------------------------+
+|  {BOLD}*  VulnHunter{RST}{C}  -  Automated Web Vulnerability Scanner  |
+|  {DIM}OWASP Top 10  |  Python 3.11  |  Async Engine{RST}{C}          |
++------------------------------------------------------+{RST}
 """)
 
 
@@ -80,9 +80,9 @@ def print_summary(result: ScanResult):
     total  = len(result.vulnerabilities)
     dur    = result.duration_seconds
 
-    print(f"\n{BOLD}{'─'*54}{RST}")
+    print(f"\n{BOLD}{'-'*54}{RST}")
     print(f"{BOLD}  Scan Summary{RST}")
-    print(f"{'─'*54}")
+    print(f"{'-'*54}")
     print(f"  Target     : {C}{result.target_url}{RST}")
     print(f"  Status     : {G if result.status.value == 'completed' else R}{result.status.value.upper()}{RST}")
     print(f"  Duration   : {dur:.1f}s" if dur else "  Duration   : —")
@@ -95,9 +95,9 @@ def print_summary(result: ScanResult):
         for sev in [Severity.CRITICAL, Severity.HIGH, Severity.MEDIUM, Severity.LOW]:
             c = counts.get(sev.value, 0)
             if c:
-                bar = "█" * c
+                bar = "#" * c
                 print(f"  {SEV_COLORS[sev]}{sev.value.capitalize().ljust(10)} {bar} {c}{RST}")
-    print(f"{'─'*54}\n")
+    print(f"{'-'*54}\n")
 
 
 async def cli_scan(args):
@@ -119,7 +119,7 @@ async def cli_scan(args):
     print(f"  {DIM}Depth    :{RST} {args.depth}")
     print(f"  {DIM}Timeout  :{RST} {args.timeout}s")
     print()
-    print(f"  {G}▶ Starting scan...{RST}")
+    print(f"  {G}> Starting scan...{RST}")
 
     scan_id = str(uuid.uuid4())
     request = ScanRequest(
@@ -142,12 +142,12 @@ async def cli_scan(args):
     await run_scan(scan_id, request)
     spinner_task.cancel()
 
-    print(f"\r  {G}✓ Scan complete{RST}          ")
+    print(f"\r  {G}[OK] Scan complete{RST}          ")
 
     # Print findings if verbose
     if args.verbose and result.vulnerabilities:
         print(f"\n{BOLD}  Vulnerabilities Found{RST}")
-        print(f"{'─'*54}")
+        print(f"{'-'*54}")
         sorted_vulns = sorted(
             result.vulnerabilities,
             key=lambda v: [Severity.CRITICAL, Severity.HIGH, Severity.MEDIUM, Severity.LOW, Severity.INFO].index(v.severity)
@@ -164,12 +164,12 @@ async def cli_scan(args):
             data = generate_pdf(result)
             with open(args.output, "wb") as f:
                 f.write(data)
-            print(f"  {G}📋 PDF report saved :{RST} {args.output}")
+            print(f"  {G}[PDF] report saved :{RST} {args.output}")
         else:
             md = generate_markdown(result)
             with open(args.output, "w") as f:
                 f.write(md)
-            print(f"  {G}📄 Markdown report  :{RST} {args.output}")
+            print(f"  {G}[MD] report saved  :{RST} {args.output}")
         print()
 
     # Exit code based on findings
@@ -184,7 +184,7 @@ async def cli_scan(args):
 async def _spinner(result: ScanResult):
     """Live progress spinner."""
     from app.models.scan import ScanStatus
-    frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+    frames = ["-", "\\", "|", "/"]
     i = 0
     while True:
         status = result.status

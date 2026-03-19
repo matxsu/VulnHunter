@@ -1,6 +1,6 @@
 import httpx
 import re
-from urllib.parse import urlparse
+from urllib.parse import urlparse, parse_qs
 from app.models.scan import Vulnerability, VulnType, Severity
 
 
@@ -144,13 +144,13 @@ async def scan_ssrf(
     client: httpx.AsyncClient,
     url: str,
     params: dict,
+    method: str = "GET",
     timeout: int = 10,
 ) -> list[Vulnerability]:
     vulns = []
     found_params = set()
 
     parsed = urlparse(url)
-    from urllib.parse import parse_qs
     query_params = {k: v[0] for k, v in parse_qs(parsed.query).items()}
     all_params = {**query_params, **params}
 
@@ -159,7 +159,7 @@ async def scan_ssrf(
         k: v for k, v in all_params.items()
         if any(ssrf_p in k.lower() for ssrf_p in SSRF_PARAMS)
     }
-    if not ssrf_candidate_params:
+    if not ssrf_candidate_params and method == "GET":
         for ssrf_p in SSRF_PARAMS[:4]:
             ssrf_candidate_params[ssrf_p] = "http://example.com"
 
@@ -170,7 +170,10 @@ async def scan_ssrf(
         for payload in SSRF_PAYLOADS:
             try:
                 test_params = {**all_params, param_name: payload}
-                resp = await client.get(url, params=test_params, timeout=timeout)
+                if method.upper() == "POST":
+                    resp = await client.post(url, data=test_params, timeout=timeout)
+                else:
+                    resp = await client.get(url, params=test_params, timeout=timeout)
 
                 # Check for internal content in response
                 for pattern in SSRF_INTERNAL_PATTERNS:
@@ -181,9 +184,9 @@ async def scan_ssrf(
                             url=url,
                             parameter=param_name,
                             payload=payload,
-                            evidence=f"Internal resource content detected matching pattern: '{pattern}'",
+                            evidence=f"Internal resource content detected matching pattern: '{pattern}' in {method} response",
                             description=(
-                                f"Server-Side Request Forgery in parameter '{param_name}'. "
+                                f"Server-Side Request Forgery in parameter '{param_name}' ({method}). "
                                 "The server fetches remote URLs based on user input and "
                                 "returns internal resource content, enabling access to "
                                 "metadata services, internal hosts, and cloud credentials."
@@ -202,7 +205,7 @@ async def scan_ssrf(
 
                 # Check for unexpected 200 on internal addresses
                 if (resp.status_code == 200
-                        and "127.0.0.1" in payload or "localhost" in payload
+                        and ("127.0.0.1" in payload or "localhost" in payload)
                         and len(resp.text) > 100):
                     if param_name not in found_params:
                         vulns.append(Vulnerability(
@@ -211,9 +214,9 @@ async def scan_ssrf(
                             url=url,
                             parameter=param_name,
                             payload=payload,
-                            evidence=f"HTTP 200 response for internal address payload (body length: {len(resp.text)})",
+                            evidence=f"HTTP 200 response for internal address payload in {method}",
                             description=(
-                                f"Potential SSRF in parameter '{param_name}'. "
+                                f"Potential SSRF in parameter '{param_name}' ({method}). "
                                 "The server appears to follow redirects or fetch URLs pointing to localhost."
                             ),
                             remediation=(
@@ -270,13 +273,13 @@ async def scan_path_traversal(
     client: httpx.AsyncClient,
     url: str,
     params: dict,
+    method: str = "GET",
     timeout: int = 10,
 ) -> list[Vulnerability]:
     vulns = []
     found_params = set()
 
     parsed = urlparse(url)
-    from urllib.parse import parse_qs
     query_params = {k: v[0] for k, v in parse_qs(parsed.query).items()}
     all_params = {**query_params, **params}
 
@@ -285,7 +288,7 @@ async def scan_path_traversal(
         k: v for k, v in all_params.items()
         if any(p in k.lower() for p in PATH_TRAVERSAL_PARAMS)
     }
-    if not candidate_params:
+    if not candidate_params and method == "GET":
         candidate_params = all_params or {"file": "index.html"}
 
     for param_name, original_value in candidate_params.items():
@@ -295,7 +298,10 @@ async def scan_path_traversal(
         for payload in PATH_TRAVERSAL_PAYLOADS:
             try:
                 test_params = {**all_params, param_name: payload}
-                resp = await client.get(url, params=test_params, timeout=timeout)
+                if method.upper() == "POST":
+                    resp = await client.post(url, data=test_params, timeout=timeout)
+                else:
+                    resp = await client.get(url, params=test_params, timeout=timeout)
 
                 for pattern in TRAVERSAL_SUCCESS_PATTERNS:
                     if re.search(pattern, resp.text):
@@ -305,9 +311,9 @@ async def scan_path_traversal(
                             url=url,
                             parameter=param_name,
                             payload=payload,
-                            evidence=f"Sensitive file content detected: '{pattern}'",
+                            evidence=f"Sensitive file content detected matching pattern: '{pattern}' in {method}",
                             description=(
-                                f"Path Traversal vulnerability in parameter '{param_name}'. "
+                                f"Path Traversal vulnerability in parameter '{param_name}' ({method}). "
                                 "The application allows reading arbitrary files from the "
                                 "server filesystem using directory traversal sequences (../)."
                             ),

@@ -79,6 +79,7 @@ async def scan_sqli(
     client: httpx.AsyncClient,
     url: str,
     params: dict,
+    method: str = "GET",
     timeout: int = 10,
 ) -> list[Vulnerability]:
     vulns = []
@@ -88,7 +89,7 @@ async def scan_sqli(
     query_params = parse_qs(parsed.query)
     all_params = {**{k: v[0] for k, v in query_params.items()}, **params}
 
-    if not all_params:
+    if not all_params and method == "GET":
         all_params = {"id": "1", "q": "test", "search": "test", "page": "1"}
 
     for param_name, original_value in all_params.items():
@@ -98,8 +99,12 @@ async def scan_sqli(
         # Error-based detection
         for payload in SQLI_PAYLOADS["error_based"]:
             try:
-                test_params = {**all_params, param_name: original_value + payload}
-                resp = await client.get(url, params=test_params, timeout=timeout)
+                test_params = {**all_params, param_name: str(original_value) + payload}
+                if method.upper() == "POST":
+                    resp = await client.post(url, data=test_params, timeout=timeout)
+                else:
+                    resp = await client.get(url, params=test_params, timeout=timeout)
+                
                 evidence = _detect_error(resp.text)
                 if evidence:
                     vulns.append(Vulnerability(
@@ -108,9 +113,9 @@ async def scan_sqli(
                         url=url,
                         parameter=param_name,
                         payload=payload,
-                        evidence=f"SQL error pattern detected: '{evidence[:100]}'",
+                        evidence=f"SQL error pattern detected in {method} response",
                         description=(
-                            f"SQL Injection vulnerability found in parameter '{param_name}'. "
+                            f"SQL Injection vulnerability found in parameter '{param_name}' ({method}). "
                             "Error-based technique reveals database error messages indicating "
                             "unsanitized SQL query construction."
                         ),
@@ -135,8 +140,12 @@ async def scan_sqli(
             true_payload = f"{original_value}' AND '1'='1"
             false_payload = f"{original_value}' AND '1'='2"
 
-            resp_true = await client.get(url, params={**all_params, param_name: true_payload}, timeout=timeout)
-            resp_false = await client.get(url, params={**all_params, param_name: false_payload}, timeout=timeout)
+            if method.upper() == "POST":
+                resp_true = await client.post(url, data={**all_params, param_name: true_payload}, timeout=timeout)
+                resp_false = await client.post(url, data={**all_params, param_name: false_payload}, timeout=timeout)
+            else:
+                resp_true = await client.get(url, params={**all_params, param_name: true_payload}, timeout=timeout)
+                resp_false = await client.get(url, params={**all_params, param_name: false_payload}, timeout=timeout)
 
             len_diff = abs(len(resp_true.text) - len(resp_false.text))
             if len_diff > 50 and resp_true.status_code == resp_false.status_code:
@@ -146,9 +155,9 @@ async def scan_sqli(
                     url=url,
                     parameter=param_name,
                     payload=f"AND '1'='1 vs AND '1'='2",
-                    evidence=f"Boolean-based: response length difference of {len_diff} chars between true/false conditions",
+                    evidence=f"Boolean-based {method}: response length difference of {len_diff} chars between true/false conditions",
                     description=(
-                        f"Boolean-based SQL Injection in parameter '{param_name}'. "
+                        f"Boolean-based SQL Injection in parameter '{param_name}' ({method}). "
                         "The application returns different content based on true/false SQL conditions."
                     ),
                     remediation=(
@@ -170,8 +179,11 @@ async def scan_sqli(
             try:
                 import time
                 start = time.time()
-                test_params = {**all_params, param_name: original_value + payload}
-                await client.get(url, params=test_params, timeout=timeout)
+                test_params = {**all_params, param_name: str(original_value) + payload}
+                if method.upper() == "POST":
+                    await client.post(url, data=test_params, timeout=timeout)
+                else:
+                    await client.get(url, params=test_params, timeout=timeout)
                 elapsed = time.time() - start
 
                 if elapsed >= 4.5:
@@ -181,9 +193,9 @@ async def scan_sqli(
                         url=url,
                         parameter=param_name,
                         payload=payload,
-                        evidence=f"Time-based: response delayed by {elapsed:.1f}s (threshold: 4.5s)",
+                        evidence=f"Time-based {method}: response delayed by {elapsed:.1f}s",
                         description=(
-                            f"Time-based Blind SQL Injection in parameter '{param_name}'. "
+                            f"Time-based Blind SQL Injection in parameter '{param_name}' ({method}). "
                             "The application execution is delayed when injecting time-delay SQL functions."
                         ),
                         remediation=(

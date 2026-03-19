@@ -62,6 +62,7 @@ async def scan_xss(
     client: httpx.AsyncClient,
     url: str,
     params: dict,
+    method: str = "GET",
     timeout: int = 10,
 ) -> list[Vulnerability]:
     vulns = []
@@ -71,7 +72,7 @@ async def scan_xss(
     query_params = parse_qs(parsed.query)
     all_params = {**{k: v[0] for k, v in query_params.items()}, **params}
 
-    if not all_params:
+    if not all_params and method == "GET":
         all_params = {"q": "test", "search": "test", "name": "test", "comment": "test"}
 
     for param_name, original_value in all_params.items():
@@ -81,7 +82,11 @@ async def scan_xss(
         for payload in XSS_PAYLOADS:
             try:
                 test_params = {**all_params, param_name: payload}
-                resp = await client.get(url, params=test_params, timeout=timeout)
+                
+                if method.upper() == "POST":
+                    resp = await client.post(url, data=test_params, timeout=timeout)
+                else:
+                    resp = await client.get(url, params=test_params, timeout=timeout)
 
                 if _check_reflected(payload, resp.text):
                     # Check if it's inside a script context
@@ -89,7 +94,7 @@ async def scan_xss(
                     is_dom = len(dom_sinks) > 0
 
                     vuln_desc = (
-                        f"Reflected XSS in parameter '{param_name}'. "
+                        f"Reflected XSS in parameter '{param_name}' ({method}). "
                         "The user-supplied input is returned in the HTTP response without "
                         "proper HTML encoding, allowing script execution in victim's browser."
                     )
@@ -102,7 +107,7 @@ async def scan_xss(
                         url=url,
                         parameter=param_name,
                         payload=payload,
-                        evidence=f"Payload reflected verbatim in response (length: {len(resp.text)})",
+                        evidence=f"Payload reflected verbatim in {method} response",
                         description=vuln_desc,
                         remediation=(
                             "Encode output using HTML entity encoding (e.g., &lt; &gt; &amp;). "
@@ -124,7 +129,11 @@ async def scan_xss(
 
         # Check for DOM sinks without payload reflection (DOM XSS potential)
         try:
-            resp = await client.get(url, params=all_params, timeout=timeout)
+            if method.upper() == "POST":
+                resp = await client.post(url, data=all_params, timeout=timeout)
+            else:
+                resp = await client.get(url, params=all_params, timeout=timeout)
+                
             dom_sinks = _check_dom_sink(resp.text)
             if dom_sinks:
                 vulns.append(Vulnerability(
@@ -133,7 +142,7 @@ async def scan_xss(
                     url=url,
                     parameter=param_name,
                     payload=None,
-                    evidence=f"DOM sinks found: {', '.join(dom_sinks[:5])}",
+                    evidence=f"DOM sinks found on page with {method} form",
                     description=(
                         f"Potential DOM-based XSS. Dangerous JavaScript sinks detected "
                         f"in the page source: {', '.join(dom_sinks[:3])}. "

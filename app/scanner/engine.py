@@ -26,8 +26,10 @@ def list_scans() -> list[ScanResult]:
 
 
 LINK_PATTERN = re.compile(r'href=["\']([^"\'#]+)["\']', re.IGNORECASE)
-FORM_ACTION_PATTERN = re.compile(r'<form[^>]*action=["\']([^"\']+)["\']', re.IGNORECASE)
-INPUT_PATTERN = re.compile(r'<input[^>]*name=["\']([^"\']+)["\']', re.IGNORECASE)
+FORM_PATTERN = re.compile(r'<form[^>]*>(.*?)</form>', re.IGNORECASE | re.DOTALL)
+METHOD_PATTERN = re.compile(r'method=["\'](POST|GET)["\']', re.IGNORECASE)
+ACTION_PATTERN = re.compile(r'action=["\']([^"\']*)["\']', re.IGNORECASE)
+INPUT_PATTERN = re.compile(r'<(?:input|textarea)[^>]*name=["\']([^"\']+)["\']', re.IGNORECASE)
 
 
 def _extract_links(base_url: str, html: str) -> list[str]:
@@ -45,13 +47,30 @@ def _extract_links(base_url: str, html: str) -> list[str]:
     return links
 
 
-def _extract_form_params(html: str) -> dict:
-    """Extract form input names as params dict."""
-    params = {}
-    for match in INPUT_PATTERN.finditer(html):
-        name = match.group(1)
-        params[name] = "test"
-    return params
+def _extract_forms(base_url: str, html: str) -> list[tuple[str, str, dict]]:
+    """Extract forms from HTML as (action_url, method, params)."""
+    forms = []
+    for match in FORM_PATTERN.finditer(html):
+        form_html = match.group(0)
+        inner_html = match.group(1)
+        
+        # Method
+        method_match = METHOD_PATTERN.search(form_html)
+        method = method_match.group(1).upper() if method_match else "GET"
+        
+        # Action
+        action_match = ACTION_PATTERN.search(form_html)
+        action = action_match.group(1) if action_match else ""
+        action_url = urljoin(base_url, action)
+        
+        # Params
+        params = {}
+        for inp in INPUT_PATTERN.finditer(inner_html):
+            name = inp.group(1)
+            params[name] = "test"
+            
+        forms.append((action_url, method, params))
+    return forms
 
 
 async def _crawl(
@@ -59,8 +78,8 @@ async def _crawl(
     start_url: str,
     depth: int,
     timeout: int,
-) -> list[tuple[str, dict]]:
-    """BFS crawler. Returns list of (url, params) tuples."""
+) -> list[tuple[str, dict, str]]:
+    """BFS crawler. Returns list of (url, params, method) tuples."""
     visited = set()
     queue = deque([(start_url, 0, {})])
     pages = []
@@ -74,15 +93,18 @@ async def _crawl(
         try:
             resp = await client.get(url, timeout=timeout)
             html = resp.text
-            pages.append((url, params))
+            pages.append((url, params, "GET"))
 
             if current_depth < depth:
                 links = _extract_links(url, html)
-                form_params = _extract_form_params(html)
-
-                for link in links[:20]:  # Limit per page
+                for link in links[:20]:
                     if link not in visited:
-                        queue.append((link, current_depth + 1, form_params))
+                        queue.append((link, current_depth + 1, {}))
+                
+                # Handle forms as separate scan targets
+                forms = _extract_forms(url, html)
+                for f_url, f_method, f_params in forms:
+                    pages.append((f_url, f_params, f_method))
 
         except (httpx.TimeoutException, httpx.ConnectError, httpx.HTTPStatusError):
             continue
@@ -120,17 +142,17 @@ async def run_scan(scan_id: str, request: ScanRequest) -> None:
             requests_count = 0
 
             scan_tasks = []
-            for url, params in pages:
+            for url, params, method in pages:
                 for vuln_type in request.scan_types:
-                    scan_tasks.append((vuln_type, url, params))
+                    scan_tasks.append((vuln_type, url, params, method))
 
             # Run scans concurrently (batched)
             BATCH_SIZE = 10
             for i in range(0, len(scan_tasks), BATCH_SIZE):
                 batch = scan_tasks[i:i + BATCH_SIZE]
                 batch_results = await asyncio.gather(
-                    *[_run_single_scan(client, vuln_type, url, params, request.timeout)
-                      for vuln_type, url, params in batch],
+                    *[_run_single_scan(client, vuln_type, url, params, method, request.timeout)
+                      for vuln_type, url, params, method in batch],
                     return_exceptions=True,
                 )
                 for res in batch_results:
@@ -166,19 +188,20 @@ async def _run_single_scan(
     vuln_type: VulnType,
     url: str,
     params: dict,
+    method: str,
     timeout: int,
 ) -> list:
     try:
         if vuln_type == VulnType.SQL_INJECTION:
-            return await scan_sqli(client, url, params, timeout)
+            return await scan_sqli(client, url, params, method, timeout)
         elif vuln_type == VulnType.XSS:
-            return await scan_xss(client, url, params, timeout)
+            return await scan_xss(client, url, params, method, timeout)
         elif vuln_type == VulnType.CSRF:
             return await scan_csrf(client, url, timeout)
         elif vuln_type == VulnType.SSRF:
-            return await scan_ssrf(client, url, params, timeout)
+            return await scan_ssrf(client, url, params, method, timeout)
         elif vuln_type == VulnType.PATH_TRAVERSAL:
-            return await scan_path_traversal(client, url, params, timeout)
+            return await scan_path_traversal(client, url, params, method, timeout)
         return []
     except Exception as e:
         logger.warning(f"Scanner error ({vuln_type} on {url}): {e}")
