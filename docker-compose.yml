@@ -1,4 +1,4 @@
-version: "3.9"
+# version: "3.9" (obsolete, removing)
 
 services:
 
@@ -18,8 +18,7 @@ services:
     networks:
       - scanner-net
     depends_on:
-      dvwa:
-        condition: service_healthy
+      - dvwa
     restart: unless-stopped
 
   # ── DVWA — Damn Vulnerable Web Application ──────────────────────
@@ -32,12 +31,7 @@ services:
       - MYSQL_ROOT_PASSWORD=dvwa
     networks:
       - scanner-net
-    healthcheck:
-      test: [ "CMD", "curl", "-f", "http://localhost:80/login.php" ]
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 30s
+    # (healthcheck removed because curl is missing in this image)
     restart: unless-stopped
 
   # ── OWASP Juice Shop ────────────────────────────────────────────

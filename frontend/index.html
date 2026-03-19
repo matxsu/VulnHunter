@@ -744,11 +744,11 @@
                 <div class="check-box">✓</div>
                 <span class="check-label">XSS</span>
               </div>
-              <div class="check-item active" data-val="CSRF">
+              <div class="check-item active" data-val="Cross-Site Request Forgery (CSRF)">
                 <div class="check-box">✓</div>
                 <span class="check-label">CSRF</span>
               </div>
-              <div class="check-item active" data-val="SSRF">
+              <div class="check-item active" data-val="Server-Side Request Forgery (SSRF)">
                 <div class="check-box">✓</div>
                 <span class="check-label">SSRF</span>
               </div>
@@ -1043,7 +1043,13 @@ async function startScan() {
 
     if (!res.ok) {
       const err = await res.json();
-      throw new Error(err.detail || res.statusText);
+      let errorMsg = res.statusText;
+      if (err && err.detail) {
+        errorMsg = typeof err.detail === 'string' 
+          ? err.detail 
+          : err.detail.map(d => `${d.loc.join('.')}: ${d.msg}`).join(', ');
+      }
+      throw new Error(errorMsg);
     }
 
     const scan = await res.json();
